@@ -556,16 +556,16 @@ function y = HEMEX_model(params, t, AIF, r2p, r2l)
 
     R = @(t)gammainc(t/beta, alpha, 'upper').*(t>=0);
     Pv = (1/mu)*conv(AIF_shifted,exp(-(k+rp)*t).*R(t),'full');
-    Pv = Pv(1:length(t));
+    Pv = Pv(1:length(t)); % Pyruvate vascular
 
     k_plus = -1/2*(klp+kpl+rl+rp) + 1/2 * sqrt((klp+kpl+rl+rp)^2-4*(kpl*rl+klp*rp+rp*rl));
     k_minus = -1/2*(klp+kpl+rl+rp) - 1/2 * sqrt((klp+kpl+rl+rp)^2-4*(kpl*rl+klp*rp+rp*rl));
 
-    L = k*kpl/(k_plus-k_minus)*conv(Pv,exp(k_plus*t)-exp(k_minus*t),'full');
-    Pt = k/(k_plus-k_minus)*conv(Pv,(k_plus+klp+rl)*exp(k_plus*t)-(k_minus+klp+rl)*exp(k_minus*t),'full');
+    L = k*kpl/(k_plus-k_minus)*conv(Pv,exp(k_plus*t)-exp(k_minus*t),'full'); % Lactate tissue
+    Pt = k/(k_plus-k_minus)*conv(Pv,(k_plus+klp+rl)*exp(k_plus*t)-(k_minus+klp+rl)*exp(k_minus*t),'full'); % Pyruvate tissue
 
-    y(1,:) = L(1:length(t));  % Lactate signal
-    y(2,:) = Pt(1:length(t))+Pv(1:length(t)); % Pyruvate signal
+    y(1,:) = L(1:length(t));  % Total lactate signal
+    y(2,:) = Pt(1:length(t))+Pv(1:length(t)); % Total pyruvate signal
 end
 
 function [AIF_fit] = AIF_model_fit(t, AIF_raw)

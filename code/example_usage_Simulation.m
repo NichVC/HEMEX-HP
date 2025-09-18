@@ -5,10 +5,11 @@
 % June 2025
 
 %% Simulation
-t = linspace(0,160,161);
+TR = 1; % s
+time_max = 180; % s
+t = linspace(0,time_max-TR,time_max/TR);
 flip_P = 10;
 flip_L = 10;
-TR = t(2)-t(1);
 kpl = 0.02;
 klp = 0;
 r1p = 1/30;
@@ -17,6 +18,8 @@ k = 10; % multiply of kpl
 t0_model = 0;
 mu = 5;
 sigma = 3;
+noise_scale = 0.03; % scaled from maximum signal
+noise_realizations = 10; % number of repeated noise simulations
 
 r2p = -log(cosd(flip_P))/TR; % Relaxation due to pulsing, see Hill et al. 2013 (Model Free Approach)
 r2l = -log(cosd(flip_L))/TR;
@@ -55,14 +58,14 @@ params_ub = bounds(:,3);
 kpl_fits = [];
 k_fits = [];
 mu_fits = [];
-kpl_fits_hill = [];
+kpl_ratio = [];
 
 % First go from Mz to Mxy
 Pxy = y_sim(2,:)*sind(flip_P);
 Lxy = y_sim(1,:)*sind(flip_L);
 
-for i=1:10
-    noise_level = max(Pxy+Lxy)*0.03;
+for i=1:noise_realizations
+    noise_level = max(Pxy+Lxy)*noise_scale;
     
     noise_L = normrnd(0,noise_level,1,length(Pxy));
     noise_P = normrnd(0,noise_level,1,length(Lxy));
@@ -91,8 +94,7 @@ for i=1:10
     k_fits(i) = k_fit*kpl_fit;
     mu_fits(i) = mu_fit;
     
-    kpl_hill = sum(Lz_noisy)/sum(Pz_noisy)*rl;
-    kpl_fits_hill(i) = kpl_hill;
+    kpl_ratio(i) = sum(Lz_noisy)/sum(Pz_noisy)*rl;
 end
 
 kpl_fit_mean = mean(kpl_fits);
@@ -102,8 +104,14 @@ k_fit_std = std(k_fits);
 mu_fit_mean = mean(mu_fits);
 mu_fit_std = std(mu_fits);
 
-hill_mean_kpl = mean(kpl_fits_hill)
-hill_std_kpl = std(kpl_fits_hill)
+kpl_ratio_mean = mean(kpl_ratio);
+kpl_ratio_std = std(kpl_ratio);
+
+disp('=======================================')
+fprintf('kPL (true): %.3f\n', kpl);
+fprintf('kPL (HEMEX): %.3f ± %.3f\n', kpl_fit_mean, kpl_fit_std);
+fprintf('kPL (ratio-metric): %.3f ± %.3f\n', kpl_ratio_mean, kpl_ratio_std);
+disp('=======================================')
 
 %% Plotting 
 fig = figure('Renderer', 'painters', 'Position', [400 300 700 250]);
@@ -138,9 +146,6 @@ plot(t,y_fit(2,:)*sind(flip_P),'r-')
 legend('Lactate noisy','Pyruvate noisy','Lactate fit','Pyruvate fit')
 title(['k_P_L = ',num2str(kpl_fit_mean,'%.3f'),' ',char(177),' ',num2str(kpl_fit_std,'%.3f'),' s^-^1, k = ',num2str(k_fit_mean,'%.3f'),' ',char(177),' ',num2str(k_fit_std,'%.3f'),' s^-^1',newline,'MTT = ',num2str(mu_fit_mean,'%.3f'),' ',char(177),' ',num2str(mu_fit_std,'%.3f'),'s'],'fontsize',9)
 
-% Save figure (optional)
-%saveas(fig,'HEMEX_simulation.svg');
-
 %% Model functions
 function y = HEMEX_model(params, t, AIF, r2p, r2l)
     kpl = params(1);
@@ -161,16 +166,16 @@ function y = HEMEX_model(params, t, AIF, r2p, r2l)
 
     R = @(t)gammainc(t/beta, alpha, 'upper').*(t>=0);
     Pv = (1/mu)*conv(AIF_shifted,exp(-(k+rp)*t).*R(t),'full');
-    Pv = Pv(1:length(t));
+    Pv = Pv(1:length(t)); % Pyruvate vascular
 
     k_plus = -1/2*(klp+kpl+rl+rp) + 1/2 * sqrt((klp+kpl+rl+rp)^2-4*(kpl*rl+klp*rp+rp*rl));
     k_minus = -1/2*(klp+kpl+rl+rp) - 1/2 * sqrt((klp+kpl+rl+rp)^2-4*(kpl*rl+klp*rp+rp*rl));
 
-    L = k*kpl/(k_plus-k_minus)*conv(Pv,exp(k_plus*t)-exp(k_minus*t),'full');
-    Pt = k/(k_plus-k_minus)*conv(Pv,(k_plus+klp+rl)*exp(k_plus*t)-(k_minus+klp+rl)*exp(k_minus*t),'full');
+    L = k*kpl/(k_plus-k_minus)*conv(Pv,exp(k_plus*t)-exp(k_minus*t),'full'); % Lactate tissue
+    Pt = k/(k_plus-k_minus)*conv(Pv,(k_plus+klp+rl)*exp(k_plus*t)-(k_minus+klp+rl)*exp(k_minus*t),'full'); % Pyruvate tissue
 
-    y(1,:) = L(1:length(t));  % Lactate signal
-    y(2,:) = Pt(1:length(t))+Pv(1:length(t)); % Pyruvate signal
+    y(1,:) = L(1:length(t));  % Total lactate signal
+    y(2,:) = Pt(1:length(t))+Pv(1:length(t)); % Total pyruvate signal
 end
 
 function y = HEMEX_model_plot(params, t, AIF, r2p, r2l)
@@ -192,18 +197,18 @@ function y = HEMEX_model_plot(params, t, AIF, r2p, r2l)
 
     R = @(t)gammainc(t/beta, alpha, 'upper').*(t>=0);
     Pv = (1/mu)*conv(AIF_shifted,exp(-(k+rp)*t).*R(t),'full');
-    Pv = Pv(1:length(t));
+    Pv = Pv(1:length(t)); % Pyruvate vascular
 
     k_plus = -1/2*(klp+kpl+rl+rp) + 1/2 * sqrt((klp+kpl+rl+rp)^2-4*(kpl*rl+klp*rp+rp*rl));
     k_minus = -1/2*(klp+kpl+rl+rp) - 1/2 * sqrt((klp+kpl+rl+rp)^2-4*(kpl*rl+klp*rp+rp*rl));
 
-    L = k*kpl/(k_plus-k_minus)*conv(Pv,exp(k_plus*t)-exp(k_minus*t),'full');
-    Pt = k/(k_plus-k_minus)*conv(Pv,(k_plus+klp+rl)*exp(k_plus*t)-(k_minus+klp+rl)*exp(k_minus*t),'full');
+    L = k*kpl/(k_plus-k_minus)*conv(Pv,exp(k_plus*t)-exp(k_minus*t),'full'); % Lactate tissue
+    Pt = k/(k_plus-k_minus)*conv(Pv,(k_plus+klp+rl)*exp(k_plus*t)-(k_minus+klp+rl)*exp(k_minus*t),'full'); % Pyruvate tissue
 
-    y(1,:) = L(1:length(t));  % Lactate signal
-    y(2,:) = Pt(1:length(t))+Pv(1:length(t)); % Pyruvate signal
-    y(3,:) = Pt(1:length(t)); % Tissue
-    y(4,:) = Pv(1:length(t)); % Vascular
+    y(1,:) = L(1:length(t));  % Total lactate signal
+    y(2,:) = Pt(1:length(t))+Pv(1:length(t)); % Total pyruvate signal
+    y(3,:) = Pt(1:length(t)); % Pyruvate tissue
+    y(4,:) = Pv(1:length(t)); % Pyruvate vascular
 end
 
 function [AIF] = AIF_model(params, t)

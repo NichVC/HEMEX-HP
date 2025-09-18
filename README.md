@@ -10,7 +10,7 @@ An overview of the implementation:
 
 A dataset example of Pig Kidneys can be found under *data/*. The supplied MATLAB GUI under *code/* gives a quick and easy way to test the model fitting on <sup>13</sup>C data, as exemplified here:
 
-<img src="docs/GUI_example.png" width=100% height=100%>
+<img src="docs/GUI_example.png" width=65% height=65%>
 
 ## Usage
 

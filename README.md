@@ -1,6 +1,6 @@
 # HEMEX-HP
 
-This repository contains a MATLAB implementation of the **HEmodynamic and MEtabolic eXchange (HEMEX) Model** for fitting of dynamic Hyperpolarized (HP) <sup>13</sup>C MR images of metabolites. Currently only two simultaneous metabolites are supported (e.g. Pyruvate and Lactate). The model is published in **[To Be Published]**. 
+This repository contains a MATLAB implementation of the **HEmodynamic and MEtabolic eXchange (HEMEX) Model** for fitting of dynamic Hyperpolarized (HP) <sup>13</sup>C MR images of metabolites. Currently only two simultaneous metabolites are supported (e.g. Pyruvate and Lactate). A 4-metabolite (Pyruvate, Lactate, Bicarbonate, Alanine) implementation is currently being worked on (see code/HEMEX_main_4met.m).
 
 A biological illustration of the model parameters can be seen here:
 
@@ -37,4 +37,4 @@ Code tested on MATLAB version 24.2 (R2024b)
 
 If you use this repository in your research or publication, please cite our paper:
 
-**To Be Published**
+**N. V. Christensen, M. Redda, N. Bøgh, E. S. S. Hansen, S. Jespersen, and C. Laustsen, "A Combined Hemodynamic and Metabolic Exchange (HEMEX) Model for In Vivo Hyperpolarized 13C MRI," Magnetic Resonance in Medicine (2025): 1–12, https://doi.org/10.1002/mrm.70182.**

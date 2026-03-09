@@ -16,8 +16,8 @@ function model_fit_results = HEMEX_main_2met(AIF_raw, pyr_norm, lac_norm, TR, fl
     r2p = -log(cosd(flip_P)) / TR;
     r2l = -log(cosd(flip_L)) / TR;
 
-    % -------------------- Build AIF ------------------------
-    [AIF, aif_meta] = makeAIF(t, AIF_raw, opts);
+    % -------------------- Build AIF_fit ------------------------
+    [AIF_fit, aif_meta] = makeAIF(t, AIF_raw, opts);
 
     % -------------------- Prepare fit ----------------------
     Pz = pyr_norm(:)';  % row
@@ -38,14 +38,14 @@ function model_fit_results = HEMEX_main_2met(AIF_raw, pyr_norm, lac_norm, TR, fl
         'Display','off', 'MaxFunctionEvaluations',10000, 'MaxIterations',6000);
 
     % -------------- Fit (two curves stacked) ---------------
-    model_fun = @(p,tt) HEMEX_model_2met_expm(p, tt, AIF, r2p, r2l) .* weights;
+    model_fun = @(p,tt) HEMEX_model_2met_expm(p, tt, AIF_fit, r2p, r2l) .* weights;
     target    = [Lz; Pz] .* weights;
 
     [pars,resnorm,residual,exitflag,output] = lsqcurvefit( ...
         model_fun, params0, t, target, params_lb, params_ub, options); %#ok<ASGLU>
 
     % -------------- Predicted curves -----------------------
-    y_pred   = HEMEX_model_2met_expm(pars, t, AIF, r2p, r2l);
+    y_pred   = HEMEX_model_2met_expm(pars, t, AIF_fit, r2p, r2l);
     lac_fits = y_pred(1,:);
     pyr_fits = y_pred(2,:);
 
@@ -89,7 +89,7 @@ function model_fit_results = HEMEX_main_2met(AIF_raw, pyr_norm, lac_norm, TR, fl
     model_fit_results.lac_fits = lac_fits;
     model_fit_results.t        = t;
     model_fit_results.AIF_raw  = AIF_raw;
-    model_fit_results.AIF      = AIF;
+    model_fit_results.AIF_fit  = AIF_fit;
     model_fit_results.AIF_info = aif_meta;   % struct: method, window/params/bounds
 end
 
@@ -110,7 +110,7 @@ function opts = parseOptions(varargin)
         1      5       30;     % 7) mu
         0.5    3       30];    % 8) sigma
 
-    % Default AIF gamma bounds (params = [t0; a; b; A])
+    % Default AIF_fit gamma bounds (params = [t0; a; b; A])
     defaultAIFBounds = [ ...
        -5   2   20;   % t0
         1   3    5;   % a
@@ -132,23 +132,23 @@ function opts = parseOptions(varargin)
 end
 
 
-function [AIF, meta] = makeAIF(t, AIF_raw, opts)
+function [AIF_fit, meta] = makeAIF(t, AIF_raw, opts)
     method = lower(string(opts.AIFMethod));
     switch method
         case "movmedian"
             win  = opts.AIFWindow;
-            AIF  = movmedian(AIF_raw, win);
+            AIF_fit  = movmedian(AIF_raw, win);
             meta = struct('method','movmedian','window',win);
 
         case "gamma"
             % scale amplitude row to data scale
             bAIF = opts.AIFBounds;
             bAIF(4,:) = bAIF(4,:) * max(AIF_raw(:));   % scale A row
-            [AIF, pfit] = AIF_model_fit(t, AIF_raw, bAIF);
+            [AIF_fit, pfit] = AIF_model_fit(t, AIF_raw, bAIF);
             meta = struct('method','gamma','bounds',bAIF,'params',pfit);
 
         case "none"
-            AIF  = AIF_raw;
+            AIF_fit  = AIF_raw;
             meta = struct('method','none');
 
         otherwise
@@ -177,11 +177,11 @@ function [AIF_fit, params_fit] = AIF_model_fit(t, AIF_raw, bounds_AIF)
 end
 
 
-function AIF = AIF_model(params, t)
+function AIF_fit = AIF_model(params, t)
     % Shifted gamma variate: params = [t0; a; b; A]
     t0 = params(1); a = params(2); b = params(3); A = params(4);
     x  = t - t0;
-    AIF = A * (x > 0) .* (x).^(a-1) .* exp(-(x)/b);
+    AIF_fit = A * (x > 0) .* (x).^(a-1) .* exp(-(x)/b);
     % (x.^0 for x==0 is handled by (x>0) gate)
 end
 
@@ -190,7 +190,7 @@ end
 % ================ 2-met ODE model =====================
 % ======================================================
 
-function y = HEMEX_model_2met_expm(params, t, AIF, r2p, r2l)
+function y = HEMEX_model_2met_expm(params, t, AIF_fit, r2p, r2l)
     % HEMEX_model_2met_expm
     %   Two-metabolite HEMEX model (Pyr, Lac) using the same
     %   matrix-exponential time stepping as the 4-met model.
@@ -212,14 +212,14 @@ function y = HEMEX_model_2met_expm(params, t, AIF, r2p, r2l)
 
     Nt = numel(t);
     t  = t(:)';                   % row
-    AIF = AIF(:)';                % row
+    AIF_fit = AIF_fit(:)';                % row
 
     % --- gamma-distributed residue function R(t) ---
     alpha = mu^2 / sg^2;
     beta  = sg^2 / mu;
 
-    % time-shifted AIF
-    AIF_shifted = interp1(t, AIF, t - t0, 'linear', 0);
+    % time-shifted AIF_fit
+    AIF_shifted = interp1(t, AIF_fit, t - t0, 'linear', 0);
 
     % residue
     R = @(x) gammainc(x / beta, alpha, 'upper') .* (x >= 0);

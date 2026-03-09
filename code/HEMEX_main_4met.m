@@ -22,8 +22,8 @@ function model_fit_results = HEMEX_main_4met(AIF_raw, pyr_norm, lac_norm, bic_no
     r2b = -log(cosd(flip_B)) / TR;
     r2a = -log(cosd(flip_A)) / TR;
 
-    % -------------------- Build AIF ------------------------
-    [AIF, aif_meta] = makeAIF(t, AIF_raw, opts);
+    % -------------------- Build AIF_fit ------------------------
+    [AIF_fit, aif_meta] = makeAIF(t, AIF_raw, opts);
 
     % -------------------- Prepare data ---------------------
     Pz = pyr_norm(:)';  % row
@@ -55,13 +55,13 @@ function model_fit_results = HEMEX_main_4met(AIF_raw, pyr_norm, lac_norm, bic_no
         'Display','off', 'MaxFunctionEvaluations',10000, 'MaxIterations',6000);
 
     % -------------------- Fit ------------------------------
-    model_fun = @(p,tt) localModelSel(p, tt, AIF, r2p, r2l, r2b, r2a, sel_idx, weights);
+    model_fun = @(p,tt) localModelSel(p, tt, AIF_fit, r2p, r2l, r2b, r2a, sel_idx, weights);
 
     [pars,~,~,exitflag] = lsqcurvefit( ...
         model_fun, params0, t, target, params_lb, params_ub, options);
 
     % -------------------- Predicted curves -----------------
-    y_pred   = HEMEX_model_4met(pars, t, AIF, r2p, r2l, r2b, r2a);
+    y_pred   = HEMEX_model_4met(pars, t, AIF_fit, r2p, r2l, r2b, r2a);
     lac_fits = y_pred(1,:);
     pyr_fits = y_pred(2,:);
     bic_fits = y_pred(3,:);
@@ -163,7 +163,7 @@ function model_fit_results = HEMEX_main_4met(AIF_raw, pyr_norm, lac_norm, bic_no
 
     model_fit_results.t        = t;
     model_fit_results.AIF_raw  = AIF_raw;
-    model_fit_results.AIF      = AIF;
+    model_fit_results.AIF_fit  = AIF_fit;
     model_fit_results.AIF_info = aif_meta;
 end
 
@@ -172,8 +172,8 @@ end
 % ================== Local fit wrapper =================
 % ======================================================
 
-function ysel = localModelSel(p, tt, AIF, r2p, r2l, r2b, r2a, sel_idx, weights)
-    yfull = HEMEX_model_4met(p, tt, AIF, r2p, r2l, r2b, r2a);
+function ysel = localModelSel(p, tt, AIF_fit, r2p, r2l, r2b, r2a, sel_idx, weights)
+    yfull = HEMEX_model_4met(p, tt, AIF_fit, r2p, r2l, r2b, r2a);
     ysel  = yfull(sel_idx, :) .* weights;
 end
 
@@ -194,9 +194,9 @@ function opts = parseOptions4met(varargin)
         1      5       30;    % 7) mu
         0.5    3       30;    % 8) sigma
         0      0.01    0.3;   % 9) kpb
-        0      0.01    0.3;   % 10) kbp
+        0      0       0;     % 10) kbp
         0      0.01    0.3;   % 11) kpa
-        0      0.01    0.3;   % 12) kap
+        0      0       0;     % 12) kap
         0.8    1       1.2;   % 13) rb_scale
         0.8    1       1.2];  % 14) ra_scale
 
@@ -224,16 +224,16 @@ end
 
 
 % ======================================================
-% ===================== AIF builder ====================
+% ===================== AIF_fit builder ====================
 % ======================================================
 
-function [AIF, meta] = makeAIF(t, AIF_raw, opts)
+function [AIF_fit, meta] = makeAIF(t, AIF_raw, opts)
     method = lower(string(opts.AIFMethod));
 
     switch method
         case "movmedian"
             win  = opts.AIFWindow;
-            AIF  = movmedian(AIF_raw, win);
+            AIF_fit  = movmedian(AIF_raw, win);
             meta = struct('method','movmedian','window',win);
 
         case "gamma"
@@ -243,7 +243,7 @@ function [AIF, meta] = makeAIF(t, AIF_raw, opts)
 
             [AIF_samp, AIF_bin, pfit] = AIF_model_fit_dual(t, AIF_raw, bAIF);
 
-            AIF  = AIF_samp;  % point-sampled for modelling
+            AIF_fit  = AIF_samp;  % point-sampled for modelling
             meta = struct('method','gamma', ...
                           'bounds', bAIF, ...
                           'params', pfit, ...
@@ -251,13 +251,13 @@ function [AIF, meta] = makeAIF(t, AIF_raw, opts)
                           'AIF_binned',  AIF_bin);
 
         case "gamma_smoothed"
-            % Fit gamma, use centered TR-bin-averaged AIF for modelling
+            % Fit gamma, use centered TR-bin-averaged AIF_fit for modelling
             bAIF = opts.AIFBounds;
             bAIF(4,:) = bAIF(4,:) * max(AIF_raw(:));
 
             [AIF_samp, AIF_bin, pfit] = AIF_model_fit_dual(t, AIF_raw, bAIF);
 
-            AIF  = AIF_bin;   % bin-averaged for modelling
+            AIF_fit  = AIF_bin;   % bin-averaged for modelling
             meta = struct('method','gamma_smoothed', ...
                           'bounds', bAIF, ...
                           'params', pfit, ...
@@ -265,7 +265,7 @@ function [AIF, meta] = makeAIF(t, AIF_raw, opts)
                           'AIF_binned',  AIF_bin);
 
         case "none"
-            AIF  = AIF_raw;
+            AIF_fit  = AIF_raw;
             meta = struct('method','none');
 
         otherwise
@@ -275,7 +275,7 @@ end
 
 
 function [AIF_sampled, AIF_binned, params_fit] = AIF_model_fit_dual(t, AIF_raw, bounds_AIF)
-    % Fit shifted gamma variate to sampled AIF, then compute:
+    % Fit shifted gamma variate to sampled AIF_fit, then compute:
     % 1) AIF_sampled: gamma evaluated at t
     % 2) AIF_binned:  centered TR-bin-average of the gamma curve
 
@@ -325,10 +325,10 @@ function [AIF_sampled, AIF_binned, params_fit] = AIF_model_fit_dual(t, AIF_raw, 
     end
 end
 
-function AIF = AIF_model(params, t)
+function AIF_fit = AIF_model(params, t)
     t0 = params(1); a = params(2); b = params(3); A = params(4);
     x  = t - t0;
-    AIF = A * (x > 0) .* (x).^(a-1) .* exp(-(x)/b);
+    AIF_fit = A * (x > 0) .* (x).^(a-1) .* exp(-(x)/b);
 end
 
 
@@ -376,7 +376,7 @@ end
 % ================== 4-met ODE model ===================
 % ======================================================
 
-function y = HEMEX_model_4met(params, t, AIF, r2p, r2l, r2b, r2a)
+function y = HEMEX_model_4met(params, t, AIF_fit, r2p, r2l, r2b, r2a)
 % Output rows: [L; P_total; B; A]
 
     kpl = params(1);
@@ -400,12 +400,12 @@ function y = HEMEX_model_4met(params, t, AIF, r2p, r2l, r2b, r2a)
 
     Nt = numel(t);
     t  = t(:)';     
-    AIF = AIF(:)';
+    AIF_fit = AIF_fit(:)';
 
     alpha = mu^2 / sg^2;
     beta  = sg^2 / mu;
 
-    AIF_shifted = interp1(t, AIF, t - t0, 'linear', 0);
+    AIF_shifted = interp1(t, AIF_fit, t - t0, 'linear', 0);
 
     R  = @(x) gammainc(x / beta, alpha, 'upper') .* (x >= 0);
     Rt = R(t);

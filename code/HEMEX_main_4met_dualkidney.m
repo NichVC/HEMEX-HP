@@ -1,16 +1,46 @@
-function model_fit_results = HEMEX_main_4met(AIF_raw, pyr_norm, lac_norm, bic_norm, ala_norm, TR, flip_P, flip_L, flip_B, flip_A, varargin)
-    % HEMEX_main_4met
-    %   Fit the 4-metabolite HEMEX model (Pyr, Lac, Bic, Ala) using a matrix-exponential ODE solver,
-    %   with flexible selection of which metabolites to include in the objective function.
-    %   
+function model_fit_results = HEMEX_main_4met_dualkidney(...
+    AIF_raw, ...
+    pyr_norm_kidney1, lac_norm_kidney1, bic_norm_kidney1, ala_norm_kidney1, ...
+    pyr_norm_kidney2, lac_norm_kidney2, bic_norm_kidney2, ala_norm_kidney2, ...
+    TR, flip_P, flip_L, flip_B, flip_A, varargin)
+    % HEMEX_main_4met_dualkidney
+    %   Fit the 4-metabolite HEMEX model (Pyr, Lac, Bic, Ala) to TWO kidney ROIs
+    %   simultaneously using a shared parameter set, except for separate t0_delay
+    %   terms for kidney 1 and kidney 2.
+    %
+    %   The residual vector is constructed by stacking the selected metabolite
+    %   curves from kidney 1 and kidney 2. This means the optimizer finds one
+    %   parameter set that best explains both kidneys at the same time.
+    %
     %   Usage:
-    %     s = HEMEX_main_4met(AIF_raw, pyr, lac, bic, ala, TR, flipP, flipL, flipB, flipA);
-    %     s = HEMEX_main_4met(..., 'FitMetabolites', {'P','L'});
-    %     s = HEMEX_main_4met(..., 'FitMetabolites', {'P','L','B','A'});
-    %     s = HEMEX_main_4met(..., 'AIFMethod','gamma', 'Bounds', myBounds);
+    %     s = HEMEX_main_4met_dualkidney(AIF_raw, ...
+    %         pyr1, lac1, bic1, ala1, pyr2, lac2, bic2, ala2, ...
+    %         TR, flipP, flipL, flipB, flipA);
+    %
+    %     s = HEMEX_main_4met_dualkidney(..., 'FitMetabolites', {'P','L'});
+    %     s = HEMEX_main_4met_dualkidney(..., 'AIFMethod','gamma', 'Bounds', myBounds);
+    %
+    %   Parameter order:
+    %     1  kpl
+    %     2  klp
+    %     3  rp_fit
+    %     4  rl_scale
+    %     5  k_scale
+    %     6  t0_delay_kidney1
+    %     7  t0_delay_kidney2
+    %     8  mu
+    %     9  sigma
+    %     10 scale_kidney1
+    %     11 scale_kidney2
+    %     12 kpb
+    %     13 kbp
+    %     14 kpa
+    %     15 kap
+    %     16 rb_scale
+    %     17 ra_scale
 
     % -------------------- Parse options --------------------
-    opts = parseOptions4met(varargin{:});
+    opts = parseOptions4met_dualkidney(varargin{:});
 
     % -------------------- Time vector ----------------------
     nTime = numel(AIF_raw);
@@ -22,28 +52,39 @@ function model_fit_results = HEMEX_main_4met(AIF_raw, pyr_norm, lac_norm, bic_no
     r2b = -log(cosd(flip_B)) / TR;
     r2a = -log(cosd(flip_A)) / TR;
 
-    % -------------------- Build AIF_fit ------------------------
+    % -------------------- Build AIF_fit --------------------
     [AIF_fit, aif_meta] = makeAIF(t, AIF_raw, opts);
 
     % -------------------- Prepare data ---------------------
-    Pz = pyr_norm(:)';  % row
-    Lz = lac_norm(:)';  % row
-    Bz = bic_norm(:)';  % row
-    Az = ala_norm(:)';  % row
+    % Row order matches the model output: [L; P; B; A]
+    data_all_k1 = [ ...
+        lac_norm_kidney1(:)';
+        pyr_norm_kidney1(:)';
+        bic_norm_kidney1(:)';
+        ala_norm_kidney1(:)'];
 
-    data_all = [Lz; Pz; Bz; Az];  % matches model output row order [L; P; B; A]
+    data_all_k2 = [ ...
+        lac_norm_kidney2(:)';
+        pyr_norm_kidney2(:)';
+        bic_norm_kidney2(:)';
+        ala_norm_kidney2(:)'];
 
     % -------------------- Select metabolites to fit --------
     [sel_idx, fit_labels] = mapFitMetabolites(opts.FitMetabolites);
 
-    data_sel = data_all(sel_idx, :);
+    data_sel_k1 = data_all_k1(sel_idx, :);
+    data_sel_k2 = data_all_k2(sel_idx, :);
 
-    % 1/max weighting per selected curve
-    maxVals = max(data_sel, [], 2);
+    % Shared metabolite weighting across both kidneys.
+    % This keeps the inter-kidney amplitude differences intact so the
+    % kidney-specific scale factors remain identifiable.
+    maxVals = max([data_sel_k1, data_sel_k2], [], 2);
     maxVals(maxVals <= 0) = 1;
-    weights = 1 ./ maxVals;  % Nsel x 1
+    weights = 1 ./ maxVals;
 
-    target = data_sel .* weights;
+    target = [ ...
+        data_sel_k1 .* weights; ...
+        data_sel_k2 .* weights];
 
     % -------------------- Bounds/init ----------------------
     params_lb = opts.Bounds(:,1);
@@ -51,40 +92,70 @@ function model_fit_results = HEMEX_main_4met(AIF_raw, pyr_norm, lac_norm, bic_no
     params_ub = opts.Bounds(:,3);
 
     options = optimoptions('lsqcurvefit', ...
-        'OptimalityTolerance',1e-16, 'FunctionTolerance',1e-16, ...
-        'Display','off', 'MaxFunctionEvaluations',10000, 'MaxIterations',6000);
+        'OptimalityTolerance',1e-16, ...
+        'FunctionTolerance',1e-16, ...
+        'Display','off', ...
+        'MaxFunctionEvaluations',10000, ...
+        'MaxIterations',6000);
 
     % -------------------- Fit ------------------------------
-    model_fun = @(p,tt) localModelSel(p, tt, AIF_fit, r2p, r2l, r2b, r2a, sel_idx, weights);
+    model_fun = @(p,tt) localModelSel_dual(...
+        p, tt, AIF_fit, r2p, r2l, r2b, r2a, sel_idx, weights);
 
-    [pars,~,~,exitflag] = lsqcurvefit( ...
+    [pars,~,~,exitflag] = lsqcurvefit(...
         model_fun, params0, t, target, params_lb, params_ub, options);
 
     % -------------------- Predicted curves -----------------
-    y_pred   = HEMEX_model_4met(pars, t, AIF_fit, r2p, r2l, r2b, r2a);
-    lac_fits = y_pred(1,:);
-    pyr_fits = y_pred(2,:);
-    bic_fits = y_pred(3,:);
-    ala_fits = y_pred(4,:);
+    y_pred_k1 = HEMEX_model_4met_singlekidney(...
+        pars, t, AIF_fit, r2p, r2l, r2b, r2a, pars(6), pars(10));
 
-    % -------------------- Normalized R^2 (selected mets) ---
+    y_pred_k2 = HEMEX_model_4met_singlekidney(...
+        pars, t, AIF_fit, r2p, r2l, r2b, r2a, pars(7), pars(11));
+
+    lac_fits_kidney1 = y_pred_k1(1,:);
+    pyr_fits_kidney1 = y_pred_k1(2,:);
+    bic_fits_kidney1 = y_pred_k1(3,:);
+    ala_fits_kidney1 = y_pred_k1(4,:);
+
+    lac_fits_kidney2 = y_pred_k2(1,:);
+    pyr_fits_kidney2 = y_pred_k2(2,:);
+    bic_fits_kidney2 = y_pred_k2(3,:);
+    ala_fits_kidney2 = y_pred_k2(4,:);
+
+    % -------------------- Normalized R^2 -------------------
     Nt = numel(t);
+
+    % Overall R^2 over both kidneys
     y_norm = [];
     y_pred_norm = [];
 
-    for ii = 1:numel(sel_idx)
-        r = sel_idx(ii);
-        d = data_all(r, :);
-        p = y_pred(r, :);
+    for kk = 1:2
+        if kk == 1
+            data_all = data_all_k1;
+            y_pred   = y_pred_k1;
+        else
+            data_all = data_all_k2;
+            y_pred   = y_pred_k2;
+        end
 
-        npair = normalize([d, p], 'range')';
-        y_norm      = [y_norm;      npair(1:Nt)];
-        y_pred_norm = [y_pred_norm; npair(Nt+1:end)];
+        for ii = 1:numel(sel_idx)
+            r = sel_idx(ii);
+            d = data_all(r, :);
+            p = y_pred(r, :);
+
+            npair = normalize([d, p], 'range')';
+            y_norm      = [y_norm;      npair(1:Nt)]; %#ok<AGROW>
+            y_pred_norm = [y_pred_norm; npair(Nt+1:end)]; %#ok<AGROW>
+        end
     end
 
     SStot = sum((y_norm(:) - mean(y_norm(:))).^2);
     SSres = sum((y_norm(:) - y_pred_norm(:)).^2);
     R2    = 1 - SSres / SStot;
+
+    % Per-kidney R^2 (useful for diagnosing mismatch)
+    R2_kidney1 = calcNormalizedR2(data_all_k1, y_pred_k1, sel_idx);
+    R2_kidney2 = calcNormalizedR2(data_all_k2, y_pred_k2, sel_idx);
 
     % -------------------- Reparameterization ----------------
     kpl   = pars(1);
@@ -92,16 +163,20 @@ function model_fit_results = HEMEX_main_4met(AIF_raw, pyr_norm, lac_norm, bic_no
     rp0   = pars(3);
     rl_sc = pars(4);
     k_sc  = pars(5);
-    t0d   = pars(6);
-    mu    = pars(7);
-    sig   = pars(8);
+    t0d_k1 = pars(6);
+    t0d_k2 = pars(7);
+    mu    = pars(8);
+    sig   = pars(9);
 
-    kpb   = pars(9);
-    kbp   = pars(10);
-    kpa   = pars(11);
-    kap   = pars(12);
-    rb_sc = pars(13);
-    ra_sc = pars(14);
+    scale_kidney1 = pars(10);
+    scale_kidney2 = pars(11);
+
+    kpb   = pars(12);
+    kbp   = pars(13);
+    kpa   = pars(14);
+    kap   = pars(15);
+    rb_sc = pars(16);
+    ra_sc = pars(17);
 
     rp_eff = rp0 + r2p;
     rl_eff = rl_sc * rp_eff + r2l;
@@ -144,27 +219,49 @@ function model_fit_results = HEMEX_main_4met(AIF_raw, pyr_norm, lac_norm, bic_no
     % extraction / hemodynamics
     model_fit_results.k_fits        = k_eff;
     model_fit_results.k_scale_fits  = k_sc;
-    model_fit_results.t0_delay_fits = t0d;
+    model_fit_results.t0_delay_kidney1_fits = t0d_k1;
+    model_fit_results.t0_delay_kidney2_fits = t0d_k2;
     model_fit_results.mu_fits       = mu;
     model_fit_results.sigma_fits    = sig;
 
+    model_fit_results.scale_kidney1_fits = scale_kidney1;
+    model_fit_results.scale_kidney2_fits = scale_kidney2;
+
+    % fit quality
     model_fit_results.R2 = R2;
+    model_fit_results.R2_kidney1 = R2_kidney1;
+    model_fit_results.R2_kidney2 = R2_kidney2;
 
-    % curves & bookkeeping
-    model_fit_results.pyr_norm = pyr_norm;
-    model_fit_results.lac_norm = lac_norm;
-    model_fit_results.bic_norm = bic_norm;
-    model_fit_results.ala_norm = ala_norm;
+    % curves & bookkeeping (raw)
+    model_fit_results.pyr_norm_kidney1 = pyr_norm_kidney1;
+    model_fit_results.lac_norm_kidney1 = lac_norm_kidney1;
+    model_fit_results.bic_norm_kidney1 = bic_norm_kidney1;
+    model_fit_results.ala_norm_kidney1 = ala_norm_kidney1;
 
-    model_fit_results.pyr_fits = pyr_fits;
-    model_fit_results.lac_fits = lac_fits;
-    model_fit_results.bic_fits = bic_fits;
-    model_fit_results.ala_fits = ala_fits;
+    model_fit_results.pyr_norm_kidney2 = pyr_norm_kidney2;
+    model_fit_results.lac_norm_kidney2 = lac_norm_kidney2;
+    model_fit_results.bic_norm_kidney2 = bic_norm_kidney2;
+    model_fit_results.ala_norm_kidney2 = ala_norm_kidney2;
+
+    % curves & bookkeeping (fits)
+    model_fit_results.pyr_fits_kidney1 = pyr_fits_kidney1;
+    model_fit_results.lac_fits_kidney1 = lac_fits_kidney1;
+    model_fit_results.bic_fits_kidney1 = bic_fits_kidney1;
+    model_fit_results.ala_fits_kidney1 = ala_fits_kidney1;
+
+    model_fit_results.pyr_fits_kidney2 = pyr_fits_kidney2;
+    model_fit_results.lac_fits_kidney2 = lac_fits_kidney2;
+    model_fit_results.bic_fits_kidney2 = bic_fits_kidney2;
+    model_fit_results.ala_fits_kidney2 = ala_fits_kidney2;
 
     model_fit_results.t        = t;
     model_fit_results.AIF_raw  = AIF_raw;
     model_fit_results.AIF_fit  = AIF_fit;
     model_fit_results.AIF_info = aif_meta;
+
+    % keep the weighted data used in the fit for reproducibility/debugging
+    model_fit_results.weights = weights;
+    model_fit_results.target_weighted = target;
 end
 
 
@@ -172,9 +269,14 @@ end
 % ================== Local fit wrapper =================
 % ======================================================
 
-function ysel = localModelSel(p, tt, AIF_fit, r2p, r2l, r2b, r2a, sel_idx, weights)
-    yfull = HEMEX_model_4met(p, tt, AIF_fit, r2p, r2l, r2b, r2a);
-    ysel  = yfull(sel_idx, :) .* weights;
+function ysel = localModelSel_dual(p, tt, AIF_fit, r2p, r2l, r2b, r2a, sel_idx, weights)
+    y1 = HEMEX_model_4met_singlekidney(p, tt, AIF_fit, r2p, r2l, r2b, r2a, p(6), p(10));
+    y2 = HEMEX_model_4met_singlekidney(p, tt, AIF_fit, r2p, r2l, r2b, r2a, p(7), p(11));
+
+    ysel1 = y1(sel_idx, :) .* weights;
+    ysel2 = y2(sel_idx, :) .* weights;
+
+    ysel = [ysel1; ysel2];
 end
 
 
@@ -182,26 +284,29 @@ end
 % =================== Option parsing ===================
 % ======================================================
 
-function opts = parseOptions4met(varargin)
+function opts = parseOptions4met_dualkidney(varargin)
 
     defaultBounds = [ ...
-        0.005  0.05    0.3;   % 1) kpl
-        0      0       0;     % 2) klp
+        0.005  0.05    0.2;   % 1) kpl
+        0.00  0.00     0.0;   % 2) klp
         0.01   1/30    0.05;  % 3) rp_fit
         0.8    1       1.2;   % 4) rl_scale
         0.05   1       20;    % 5) k_scale
-       -5      0       20;    % 6) t0_delay
-        1      5       30;    % 7) mu
-        0.5    3       30;    % 8) sigma
-        0      0.01    0.3;   % 9) kpb
-        0      0       0;     % 10) kbp
-        0      0.01    0.3;   % 11) kpa
-        0      0       0;     % 12) kap
-        0.8    1       1.2;   % 13) rb_scale
-        0.8    1       1.2];  % 14) ra_scale
+       -5      0       20;    % 6) t0_delay_kidney1
+       -5      0.25    20;    % 7) t0_delay_kidney2
+        1      5       30;    % 8) mu
+        0.5    3       30;    % 9) sigma
+        0.2    1       5;     % 10) scale_kidney1
+        0.2    1       5;     % 11) scale_kidney2
+        0      0.01    0.3;   % 12) kpb
+        0      0       0;     % 13) kbp
+        0      0.01    0.3;   % 14) kpa
+        0      0       0;     % 15) kap
+        0.8    1       1.2;   % 16) rb_scale
+        0.8    1       1.2];  % 17) ra_scale
 
     defaultAIFBounds = [ ...
-       -5   3   20;   % t0
+       -5   2   20;   % t0
         1   3    5;   % a
         1   1.5  3;   % b
         0.2 1    1.5];% A
@@ -224,7 +329,7 @@ end
 
 
 % ======================================================
-% ===================== AIF_fit builder ====================
+% ===================== AIF builder ====================
 % ======================================================
 
 function [AIF_fit, meta] = makeAIF(t, AIF_raw, opts)
@@ -277,7 +382,7 @@ end
 function [AIF_sampled, AIF_binned, params_fit] = AIF_model_fit_dual(t, AIF_raw, bounds_AIF)
     % Fit shifted gamma variate to sampled AIF_fit, then compute:
     % 1) AIF_sampled: gamma evaluated at t
-    % 2) AIF_binned:  centered TR-bin-average of the gamma curve
+    % 2) AIF_binned: centered TR-bin-average of the gamma curve
 
     opts = optimoptions('lsqcurvefit', ...
         'OptimalityTolerance',1e-16, ...
@@ -324,6 +429,7 @@ function [AIF_sampled, AIF_binned, params_fit] = AIF_model_fit_dual(t, AIF_raw, 
         end
     end
 end
+
 
 function AIF_fit = AIF_model(params, t)
     t0 = params(1); a = params(2); b = params(3); A = params(4);
@@ -373,11 +479,39 @@ end
 
 
 % ======================================================
+% ================== R2 helper =========================
+% ======================================================
+
+function R2 = calcNormalizedR2(data_all, y_pred, sel_idx)
+    Nt = size(data_all, 2);
+    y_norm = [];
+    y_pred_norm = [];
+
+    for ii = 1:numel(sel_idx)
+        r = sel_idx(ii);
+        d = data_all(r, :);
+        p = y_pred(r, :);
+
+        npair = normalize([d, p], 'range')';
+        y_norm      = [y_norm;      npair(1:Nt)]; %#ok<AGROW>
+        y_pred_norm = [y_pred_norm; npair(Nt+1:end)]; %#ok<AGROW>
+    end
+
+    SStot = sum((y_norm(:) - mean(y_norm(:))).^2);
+    SSres = sum((y_norm(:) - y_pred_norm(:)).^2);
+    R2 = 1 - SSres / SStot;
+end
+
+
+% ======================================================
 % ================== 4-met ODE model ===================
 % ======================================================
 
-function y = HEMEX_model_4met(params, t, AIF_fit, r2p, r2l, r2b, r2a)
+function y = HEMEX_model_4met_singlekidney(params, t, AIF_fit, r2p, r2l, r2b, r2a, t0_override, scale_factor)
 % Output rows: [L; P_total; B; A]
+%
+% params may be the full 17-parameter vector. Only the shared parameters,
+% the requested t0 delay, and the requested kidney scale factor are used here.
 
     % Extract parameters
     kpl = params(1);
@@ -387,22 +521,22 @@ function y = HEMEX_model_4met(params, t, AIF_fit, r2p, r2l, r2b, r2a)
     rl  = params(4) * rp + r2l;
 
     k   = params(5) * kpl;
-    t0  = params(6);
-    mu  = params(7);
-    sg  = params(8);
+    t0  = t0_override;
+    mu  = params(8);
+    sg  = params(9);
 
-    kpb = params(9);
-    kbp = params(10);
-    kpa = params(11);
-    kap = params(12);
+    kpb = params(12);
+    kbp = params(13);
+    kpa = params(14);
+    kap = params(15);
 
-    rb  = params(13) * rp + r2b;
-    ra  = params(14) * rp + r2a;
+    rb  = params(16) * rp + r2b;
+    ra  = params(17) * rp + r2a;
 
     Nt = numel(t);
-    t  = t(:)';     
+    t  = t(:)';
     AIF_fit = AIF_fit(:)';
-    
+
     % Terms for residue function
     alpha = mu^2 / sg^2;
     beta  = sg^2 / mu;
@@ -433,23 +567,25 @@ function y = HEMEX_model_4met(params, t, AIF_fit, r2p, r2l, r2b, r2a)
     e1 = [1; 0; 0; 0]; % Only pyruvate gets vascular input
 
     % Assuming constant temporal spacing between dynamic frames
-    TR = t(2) - t(1); 
-    
+    if Nt > 1
+        TR_local = t(2) - t(1);
+    else
+        TR_local = 1;
+    end
+
     % ------------------------------------------------------
     % Solve linear compartment model:
     % dM/dt = -K*M + e1*J(t)
     %
     % M = [Pt; L; B; A]
     % ------------------------------------------------------
-    
+
     % Exact kinetic evolution over one frame (matrix exponential of K)
-    % What happens to metabolites already in tissue
-    kinetic_propagator = expm(-K * TR);
-    
+    kinetic_propagator = expm(-K * TR_local);
+
     % Exact contribution from vascular pyruvate input over one frame
-    % What happens to new vascular pyruvate arriving during one frame
     vascular_input_operator = K \ ((eye(nStates) - kinetic_propagator) * e1);
-    
+
     % Propagate metabolite states through time
     for i = 1:Nt-1
         M(:, i+1) = kinetic_propagator * M(:, i) + vascular_input_operator * J(i);
@@ -461,8 +597,8 @@ function y = HEMEX_model_4met(params, t, AIF_fit, r2p, r2l, r2b, r2a)
     A  = M(4, :);
 
     y = zeros(4, Nt);
-    y(1, :) = L;
-    y(2, :) = Pt + Pv.';
-    y(3, :) = B;
-    y(4, :) = A;
+    y(1, :) = scale_factor * L;
+    y(2, :) = scale_factor * (Pt + Pv.');
+    y(3, :) = scale_factor * B;
+    y(4, :) = scale_factor * A;
 end
